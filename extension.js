@@ -26,6 +26,7 @@
  */
 
 import Clutter from 'gi://Clutter';
+import Gio from 'gi://Gio';
 import GLib from 'gi://GLib';
 import GObject from 'gi://GObject';
 import Meta from 'gi://Meta';
@@ -55,9 +56,11 @@ const SHADOW_PADDING          = 40;   // extra pixels around the shadow actor
 //   timeoutId      : GLib.Source | 0,
 // }
 // ─────────────────────────────────────────────────────────────────────────────
-let _settings    = null;
-let _connections = [];   // global connections
-const _actorMap  = new WeakMap();
+let _settings       = null;
+let _connections    = [];   // global connections
+const _actorMap     = new WeakMap();
+let _mutterSettings = null;
+let _fractionalScaling = null;
 
 // ─────────────────────────────────────────────────────────────────────────────
 // Settings helpers
@@ -219,8 +222,37 @@ function getEffect(actor) {
     return target ? target.get_effect(ROUNDED_CORNERS_EFFECT) : null;
 }
 
+/**
+ * Check whether fractional scaling is enabled.
+ * When `scale-monitor-framebuffer` is active (default on GNOME 46+ Wayland),
+ * the compositor handles scaling at the buffer level and the actor/FBO
+ * dimensions already account for the scale.  Returning the raw monitor
+ * scale in that case would double-scale all shader values.
+ */
+function isFractionalScalingEnabled() {
+    if (_fractionalScaling !== null)
+        return _fractionalScaling;
+
+    try {
+        if (!_mutterSettings)
+            _mutterSettings = new Gio.Settings({ schema_id: 'org.gnome.mutter' });
+
+        const features = _mutterSettings.get_strv('experimental-features');
+        const isWayland = !Meta.is_wayland_compositor || Meta.is_wayland_compositor();
+        _fractionalScaling = isWayland && features.includes('scale-monitor-framebuffer');
+    } catch (_) {
+        _fractionalScaling = false;
+    }
+    return _fractionalScaling;
+}
+
 /** Get the monitor scale factor for a window (respects fractional scaling). */
 function scaleFactor(win) {
+    // When fractional scaling is enabled the actor dimensions already
+    // incorporate the scale, so the shader must use scale = 1.
+    if (isFractionalScalingEnabled())
+        return 1;
+
     const idx = win.get_monitor();
     return global.display.get_monitor_scale(idx);
 }
@@ -620,21 +652,24 @@ function enableEffect() {
     addConnection(global.windowManager, 'destroy',
         (_, actor) => removeEffectFrom(actor));
 
-    // Minimise / unminimise (Compiz Magic Lamp compat)
+    // Minimise: always hide shadow + disable effect to prevent the white
+    // background of the shadow actor from showing during the animation.
     addConnection(global.windowManager, 'minimize',
         (_, actor) => {
             const data = _actorMap.get(actor);
-            const fx   = getEffect(actor);
-            if (actor.get_effect('minimize-magic-lamp-effect') && data?.shadow && fx) {
+            if (data?.shadow)
                 data.shadow.visible = false;
-                fx.enabled = false;
-            }
+            const fx = getEffect(actor);
+            if (fx) fx.enabled = false;
         });
 
+    // Unminimise: restore shadow + effect.  For the Magic-Lamp extension,
+    // wait until the animation is nearly finished before showing the shadow.
     addConnection(global.windowManager, 'unminimize',
         (_, actor) => {
             const data = _actorMap.get(actor);
             const fx   = getEffect(actor);
+
             const lamp = actor.get_effect('unminimize-magic-lamp-effect');
             if (lamp && data?.shadow && fx) {
                 data.shadow.visible = false;
@@ -648,7 +683,13 @@ function enableEffect() {
                         }
                     });
                 }
+                return;
             }
+
+            // Standard unminimise (no magic lamp)
+            if (data?.shadow)
+                data.shadow.visible = true;
+            if (fx) fx.enabled = true;
         });
 
     // Window re-stack → reorder shadow actors
@@ -704,5 +745,7 @@ export default class RoundedWindowCornersExtension extends Extension {
 
         disableEffect();
         _settings = null;
+        _mutterSettings = null;
+        _fractionalScaling = null;
     }
 }
