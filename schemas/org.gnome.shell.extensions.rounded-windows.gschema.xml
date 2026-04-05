@@ -1,0 +1,150 @@
+<?xml version="1.0" encoding="UTF-8"?>
+<schemalist>
+  <schema id="org.gnome.shell.extensions.rounded-windows"
+          path="/org/gnome/shell/extensions/rounded-windows/">
+
+    <!-- ── Core corner settings ────────────────────────────────────────── -->
+    <key name="corner-radius" type="i">
+      <range min="1" max="50"/>
+      <default>12</default>
+      <summary>Corner radius in pixels</summary>
+    </key>
+
+    <key name="smoothing" type="d">
+      <range min="0.0" max="1.0"/>
+      <default>0.6</default>
+      <summary>Squircle smoothing (0 = circle, 1 = squircle)</summary>
+    </key>
+
+    <!-- ── Padding ─────────────────────────────────────────────────────── -->
+    <key name="padding-top" type="i">
+      <range min="0" max="100"/>
+      <default>1</default>
+    </key>
+    <key name="padding-bottom" type="i">
+      <range min="0" max="100"/>
+      <default>1</default>
+    </key>
+    <key name="padding-left" type="i">
+      <range min="0" max="100"/>
+      <default>1</default>
+    </key>
+    <key name="padding-right" type="i">
+      <range min="0" max="100"/>
+      <default>1</default>
+    </key>
+
+    <!-- ── Application filtering ───────────────────────────────────────── -->
+    <key name="skip-libadwaita-app" type="b">
+      <default>true</default>
+      <summary>Skip libadwaita apps (already have native rounded corners)</summary>
+    </key>
+    <key name="skip-libhandy-app" type="b">
+      <default>false</default>
+      <summary>Skip libhandy apps</summary>
+    </key>
+
+    <!-- ── Blacklist / whitelist ───────────────────────────────────────── -->
+    <key name="blacklist" type="as">
+      <default>[]</default>
+      <summary>List of app WM class names to skip (or allow if whitelist-mode)</summary>
+    </key>
+    <key name="whitelist-mode" type="b">
+      <default>false</default>
+      <summary>Treat the blacklist as a whitelist</summary>
+    </key>
+
+    <!-- ── Border ──────────────────────────────────────────────────────── -->
+    <key name="border-width" type="i">
+      <range min="-15" max="15"/>
+      <default>0</default>
+      <summary>Border width (positive = inner, negative = outer, 0 = none)</summary>
+    </key>
+    <key name="border-red" type="d">
+      <range min="0.0" max="1.0"/>
+      <default>0.8</default>
+    </key>
+    <key name="border-green" type="d">
+      <range min="0.0" max="1.0"/>
+      <default>0.8</default>
+    </key>
+    <key name="border-blue" type="d">
+      <range min="0.0" max="1.0"/>
+      <default>0.85</default>
+    </key>
+    <key name="border-alpha" type="d">
+      <range min="0.0" max="1.0"/>
+      <default>1.0</default>
+    </key>
+
+    <!-- ── Behaviour ───────────────────────────────────────────────────── -->
+    <key name="keep-rounded-maximized" type="b">
+      <default>false</default>
+      <summary>Keep rounded corners when a window is maximized</summary>
+    </key>
+    <key name="keep-rounded-fullscreen" type="b">
+      <default>false</default>
+      <summary>Keep rounded corners when a window is full-screen</summary>
+    </key>
+
+    <!-- ── Custom shadow ───────────────────────────────────────────────── -->
+    <key name="custom-shadow" type="b">
+      <default>true</default>
+      <summary>Replace the default rectangular shadow with a rounded one</summary>
+    </key>
+    <key name="keep-shadow-maximized" type="b">
+      <default>false</default>
+      <summary>Keep the custom shadow when a window is maximized/full-screen</summary>
+    </key>
+
+    <!-- focused shadow -->
+    <key name="focused-shadow-opacity" type="i">
+      <range min="0" max="255"/>
+      <default>75</default>
+    </key>
+    <key name="focused-shadow-blur" type="i">
+      <range min="0" max="120"/>
+      <default>36</default>
+    </key>
+    <key name="focused-shadow-spread" type="i">
+      <range min="-50" max="50"/>
+      <default>0</default>
+    </key>
+    <key name="focused-shadow-x-offset" type="i">
+      <range min="-100" max="100"/>
+      <default>0</default>
+    </key>
+    <key name="focused-shadow-y-offset" type="i">
+      <range min="-100" max="100"/>
+      <default>6</default>
+    </key>
+
+    <!-- unfocused shadow -->
+    <key name="unfocused-shadow-opacity" type="i">
+      <range min="0" max="255"/>
+      <default>50</default>
+    </key>
+    <key name="unfocused-shadow-blur" type="i">
+      <range min="0" max="120"/>
+      <default>28</default>
+    </key>
+    <key name="unfocused-shadow-spread" type="i">
+      <range min="-50" max="50"/>
+      <default>0</default>
+    </key>
+    <key name="unfocused-shadow-x-offset" type="i">
+      <range min="-100" max="100"/>
+      <default>0</default>
+    </key>
+    <key name="unfocused-shadow-y-offset" type="i">
+      <range min="-100" max="100"/>
+      <default>4</default>
+    </key>
+
+    <!-- ── Debug ───────────────────────────────────────────────────────── -->
+    <key name="debug-mode" type="b">
+      <default>false</default>
+    </key>
+
+  </schema>
+</schemalist>

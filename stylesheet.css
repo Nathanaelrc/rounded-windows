@@ -1,0 +1,11 @@
+/*
+ * stylesheet.css – Rounded Window Corners
+ *
+ * Applied to the GNOME Shell process only (not to preferences).
+ * The .rwc-shadow class targets the inner St.Bin used for custom shadows.
+ */
+
+/* The outer "shadow actor" container – transparent, just for geometry */
+.rwc-shadow {
+    background:    transparent;
+}
