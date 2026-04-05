@@ -278,14 +278,16 @@ function contentOffset(win) {
 /**
  * Compute the shader bounds (x1, y1, x2, y2) in *actor-local* pixel coords,
  * taking the CSD buffer/frame difference into account.
+ * Inset by 1px on all sides to avoid rendering the edge texels of the
+ * offscreen FBO, which may be partially transparent.
  */
 function computeBounds(actor) {
     const [dx, dy, dw, dh] = contentOffset(actor.metaWindow);
     return {
         x1: dx + 1,
         y1: dy + 1,
-        x2: dx + actor.width  + dw,
-        y2: dy + actor.height + dh,
+        x2: dx + actor.width  + dw - 1,
+        y2: dy + actor.height + dh - 1,
     };
 }
 
@@ -356,7 +358,16 @@ function refreshShadowStyle(actor, shadowActor) {
     const pad    = SHADOW_PADDING * cssScale;
     const cfg    = buildConfig();
     const scfg   = shadowConfig(win.appears_focused);
-    const radius = cfg.cornerRadius * (1.0 + cfg.smoothing) * cssScale;
+
+    // Compute the CSS border-radius to match the shader's squircle.
+    // The shader uses:  exponent = smoothing*10+2,  radius = outerR * 0.5 * exponent
+    // CSS border-radius only supports circular arcs (exponent=2).
+    // A squircle extends further along diagonals than a circle of the same radius,
+    // so using the shader's radius for the CSS guarantees the transparent background
+    // never shows through the shader's transparent corners.
+    const exponent    = cfg.smoothing * 10 + 2;
+    const shaderR     = cfg.cornerRadius * 0.5 * exponent;
+    const radius      = shaderR * cssScale;
 
     const inner = shadowActor.get_first_child();
     if (!inner) return;
@@ -368,9 +379,12 @@ function refreshShadowStyle(actor, shadowActor) {
 
     shadowActor.style = `padding: ${pad}px;`;
 
+    // Use transparent background — NEVER white.  The box-shadow alone provides
+    // the visual shadow.  A white background would bleed through the shader's
+    // transparent squircle corners because CSS border-radius is circular.
     inner.style = hide
         ? 'opacity: 0;'
-        : `background: white;
+        : `background: transparent;
            border-radius: ${radius}px;
            ${boxShadowCss(scfg, cssScale)};
            margin: ${cfg.padding.top    * cssScale}px
