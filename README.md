@@ -46,7 +46,7 @@ entirely in vanilla JavaScript (no TypeScript build step).
 
 ```bash
 # 1. Clone the repository
-git clone https://github.com/marcosgt/rounded-windows
+git clone https://github.com/Nathanaelrc/rounded-windows
 cd rounded-windows
 
 # 2. Install dependency (Ubuntu / Debian)
