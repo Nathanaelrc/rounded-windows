@@ -2,8 +2,12 @@
 # install.sh – Build and install "Rounded Window Corners" into the user session
 #
 # Usage:
-#   ./install.sh          # compile schema + install extension
+#   ./install.sh              # compile schema + install extension
 #   ./install.sh --uninstall  # remove the extension
+#
+# Supported distributions:
+#   Ubuntu / Debian, Fedora / RHEL, Arch Linux, openSUSE, and any distro
+#   with glib-compile-schemas available.
 
 set -euo pipefail
 
@@ -12,7 +16,11 @@ INSTALL_DIR="${HOME}/.local/share/gnome-shell/extensions/${UUID}"
 SCRIPT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
 
 # ── Colours ──────────────────────────────────────────────────────────────────
-GREEN='\033[0;32m'; YELLOW='\033[1;33m'; RED='\033[0;31m'; NC='\033[0m'
+if [[ -t 1 ]]; then
+    GREEN='\033[0;32m'; YELLOW='\033[1;33m'; RED='\033[0;31m'; NC='\033[0m'
+else
+    GREEN=''; YELLOW=''; RED=''; NC=''
+fi
 info()    { echo -e "${GREEN}[✓]${NC} $*"; }
 warning() { echo -e "${YELLOW}[!]${NC} $*"; }
 error()   { echo -e "${RED}[✗]${NC} $*" >&2; exit 1; }
@@ -32,10 +40,26 @@ fi
 
 # ── Dependency check ──────────────────────────────────────────────────────────
 if ! command -v glib-compile-schemas &>/dev/null; then
-    error "glib-compile-schemas not found.
-  Ubuntu / Debian:  sudo apt install libglib2.0-bin
-  Fedora / RHEL:    sudo dnf install glib2
-  Arch Linux:       sudo pacman -S glib2"
+    echo ""
+    error "glib-compile-schemas not found. Install it for your distro:
+
+  Ubuntu / Debian:   sudo apt install libglib2.0-bin
+  Fedora / RHEL:     sudo dnf install glib2
+  Arch Linux:        sudo pacman -S glib2
+  openSUSE:          sudo zypper install glib2-tools"
+fi
+
+# ── GNOME Shell version check (informational) ────────────────────────────────
+if command -v gnome-shell &>/dev/null; then
+    GNOME_VER=$(gnome-shell --version 2>/dev/null | grep -oP '\d+' | head -1)
+    if [[ -n "${GNOME_VER}" ]]; then
+        if (( GNOME_VER < 45 || GNOME_VER > 50 )); then
+            warning "GNOME Shell ${GNOME_VER} detected. This extension supports GNOME 45–50."
+            warning "It may not work correctly on your version."
+        else
+            info "GNOME Shell ${GNOME_VER} detected — supported ✓"
+        fi
+    fi
 fi
 
 # ── Compile GSettings schema ──────────────────────────────────────────────────

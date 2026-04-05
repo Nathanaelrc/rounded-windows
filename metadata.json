@@ -1,7 +1,7 @@
 {
     "uuid": "rounded-windows@marcosgt.github.io",
     "name": "Rounded Window Corners",
-    "description": "Adds rounded corners to all windows in GNOME Shell, including apps that don't follow the libadwaita/libhandy themes (Firefox, VS Code, etc.). Supports GNOME 45–50.",
+    "description": "Adds rounded corners to all windows in GNOME Shell, including apps that don't use libadwaita/libhandy (Firefox, VS Code, Chromium, Electron apps, etc.). GPU-accelerated GLSL shader with squircle support, custom shadows, and per-app settings. Supports GNOME 45–50.",
     "shell-version": ["45", "46", "47", "48", "49", "50"],
     "version-name": "1.0",
     "url": "https://github.com/Nathanaelrc/rounded-windows",
