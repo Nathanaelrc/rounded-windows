@@ -577,8 +577,12 @@ function applyEffectTo(actor) {
 
     if (!actor.get_texture()) return;
 
-    attachWindowSignals(actor);
+    // Add the effect FIRST, then connect signals. If signals were connected
+    // before the effect, adding the effect could trigger notify::size
+    // synchronously, causing re-entrant calls to refreshRoundedCorners
+    // before _actorMap has been populated.
     onAddEffect(actor);
+    attachWindowSignals(actor);
 }
 
 function removeEffectFrom(actor) {

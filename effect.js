@@ -1,14 +1,24 @@
 /**
  * effect.js – GLSL Clutter effects for Rounded Window Corners
  *
- * IMPORTANT design rules for Shell.GLSLEffect on GNOME 45+:
- *   1. add_glsl_snippet() MUST be called inside vfunc_build_pipeline() only.
- *   2. get_uniform_location() MUST be called inside vfunc_build_pipeline()
- *      (NOT in the constructor – the pipeline does not exist yet).
- *   3. set_uniform_float() is safe after build_pipeline completes.
+ * IMPORTANT design rules for Shell.GLSLEffect on GNOME 50 (Mutter 18):
+ *
+ *   In shell_glsl_effect_constructed(), Mutter does:
+ *     1. klass->base_pipeline = cogl_pipeline_new(ctx)
+ *     2. klass->build_pipeline(self)   ← vfunc_build_pipeline runs HERE
+ *     3. priv->pipeline = cogl_pipeline_copy(klass->base_pipeline)
+ *
+ *   Therefore:
+ *     - add_glsl_snippet() is ONLY valid inside vfunc_build_pipeline()
+ *       (it operates on klass->base_pipeline which exists at that point).
+ *     - get_uniform_location() must NOT be called in vfunc_build_pipeline()
+ *       because it uses priv->pipeline which is still NULL at that point.
+ *     - get_uniform_location() and set_uniform_float() are safe AFTER the
+ *       constructor completes (priv->pipeline is set in step 3).
+ *     - build_pipeline runs once per GType class, not per instance.
  *
  * Based on:
- *   https://gitlab.gnome.org/GNOME/mutter/-/blob/main/src/compositor/meta-background-content.c
+ *   https://gitlab.gnome.org/GNOME/gnome-shell/-/blob/50.0/src/shell-glsl-effect.c
  *   https://github.com/flexagoon/rounded-window-corners
  */
 
@@ -104,8 +114,9 @@ const SHADOW_CODE = /* glsl */`
 // ─────────────────────────────────────────────────────────────────────────────
 // RoundedCornersEffect
 //
-// get_uniform_location() is called inside vfunc_build_pipeline() – the only
-// safe place. Uniform indices are stored per-instance (this._u), not shared.
+// add_glsl_snippet() goes in vfunc_build_pipeline() (operates on base_pipeline).
+// get_uniform_location() is deferred to first updateUniforms() call, because
+// priv->pipeline does not exist yet during build_pipeline in GNOME 50.
 // ─────────────────────────────────────────────────────────────────────────────
 export const RoundedCornersEffect = GObject.registerClass(
     { GTypeName: 'RWCRoundedCornersEffect' },
@@ -120,6 +131,12 @@ export const RoundedCornersEffect = GObject.registerClass(
                 ROUNDED_CODE,
                 false,
             );
+            // Do NOT call get_uniform_location() here.
+            // priv->pipeline is NULL during build_pipeline in GNOME 50.
+        }
+
+        _ensureUniforms() {
+            if (this._u) return;
             this._u = {
                 bounds:                 this.get_uniform_location('bounds'),
                 clipRadius:             this.get_uniform_location('clipRadius'),
@@ -139,6 +156,7 @@ export const RoundedCornersEffect = GObject.registerClass(
          * @param {object} windowBounds – {x1, y1, x2, y2} in logical pixels
          */
         updateUniforms(scaleFactor, cfg, windowBounds) {
+            this._ensureUniforms();
             if (!this._u) return;
 
             const bw     = cfg.borderWidth * scaleFactor;
@@ -205,11 +223,16 @@ export const ClipShadowEffect = GObject.registerClass(
                 SHADOW_CODE,
                 false,
             );
+            // Do NOT call get_uniform_location() or set_uniform_float() here.
+        }
+
+        _ensureUniform() {
+            if (this._uClipBounds >= 0) return;
             this._uClipBounds = this.get_uniform_location('clipBounds');
-            this.set_uniform_float(this._uClipBounds, 4, [0, 0, 0, 0]);
         }
 
         setClip(x1, y1, x2, y2) {
+            this._ensureUniform();
             if (this._uClipBounds < 0) return;
             this.set_uniform_float(this._uClipBounds, 4, [x1, y1, x2, y2]);
             this.queue_repaint();
