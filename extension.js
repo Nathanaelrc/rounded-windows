@@ -140,19 +140,15 @@ function getAppType(win) {
 /** True when this window should NOT get rounded corners. */
 function shouldSkip(win) {
     // DING (Desktop Icons NG) desktop pseudo-window
-    if (win.get_gtk_application_id?.() === 'com.rastersoft.ding')
-        return true;
+    // gtkApplicationId is a property in GJS (not a method)
+    try {
+        const appId = win.gtkApplicationId ?? win.get_gtk_application_id?.();
+        if (appId === 'com.rastersoft.ding') return true;
+    } catch (_) {}
 
     const wmClass = win.get_wm_class_instance();
     if (wmClass == null)
         return true;   // not yet initialised
-
-    // Blacklist / whitelist
-    const blacklist    = getS('blacklist');
-    const whitelistMode = getB('whitelist-mode');
-    const isListed     = blacklist.includes(wmClass);
-    if (isListed !== whitelistMode)
-        return true;
 
     // Only process normal application windows
     const normalTypes = [
@@ -163,7 +159,21 @@ function shouldSkip(win) {
     if (!normalTypes.includes(win.windowType))
         return true;
 
-    // Optionally skip libadwaita / libhandy apps
+    // Blacklist / whitelist logic:
+    //   Normal mode (whitelist-mode = false):
+    //     listed windows are EXCLUDED (blacklist)
+    //   Whitelist mode (whitelist-mode = true):
+    //     only listed windows are INCLUDED, all others are excluded
+    const blacklist     = getS('blacklist');
+    const whitelistMode = getB('whitelist-mode');
+    const isListed      = blacklist.includes(wmClass);
+
+    if (whitelistMode && !isListed)
+        return true;   // whitelist mode: skip apps not in the list
+    if (!whitelistMode && isListed)
+        return true;   // blacklist mode: skip apps in the list
+
+    // Optionally skip libadwaita / libhandy apps (unless explicitly listed)
     const appType = getAppType(win);
     if (getB('skip-libadwaita-app') && appType === 'LibAdwaita' && !isListed)
         return true;
@@ -189,12 +199,17 @@ function shouldSkip(win) {
 /**
  * Get the Clutter.Actor to which the rounded-corners effect should be applied.
  *
- * Wayland windows → the WindowActor itself.
- * X11 windows (GNOME < 50) → the WindowActor's first child (the surface).
+ * GNOME 50 is Wayland-only → always the WindowActor itself.
+ * Earlier versions with X11: first child (the surface actor).
  */
 function targetActor(actor) {
-    if (actor.metaWindow.get_client_type() === Meta.WindowClientType.X11)
-        return actor.get_first_child();
+    try {
+        const win = actor.metaWindow;
+        if (win && win.get_client_type() === Meta.WindowClientType.X11)
+            return actor.get_first_child();
+    } catch (_) {
+        // metaWindow may become invalid during destroy
+    }
     return actor;
 }
 
@@ -395,11 +410,17 @@ function onAddEffect(actor) {
 
 /** Remove effects and shadow from a window actor. */
 function onRemoveEffect(actor) {
-    logDbg(`Removing effect from "${actor.metaWindow?.title}"`);
+    try {
+        logDbg(`Removing effect from "${actor.metaWindow?.title}"`);
+    } catch (_) {}
 
-    const target = targetActor(actor);
-    if (target)
-        target.remove_effect_by_name(ROUNDED_CORNERS_EFFECT);
+    try {
+        const target = targetActor(actor);
+        if (target)
+            target.remove_effect_by_name(ROUNDED_CORNERS_EFFECT);
+    } catch (_) {
+        // Actor may already be destroyed
+    }
 
     const data = _actorMap.get(actor);
     if (!data) return;
@@ -410,10 +431,15 @@ function onRemoveEffect(actor) {
 
     // Remove and destroy the custom shadow actor
     if (data.shadow) {
-        data.shadow.get_constraints().forEach(c => data.shadow.remove_constraint(c));
-        global.windowGroup.remove_child(data.shadow);
-        data.shadow.clear_effects();
-        data.shadow.destroy();
+        try {
+            data.shadow.get_constraints().forEach(c => data.shadow.remove_constraint(c));
+            if (data.shadow.get_parent())
+                global.windowGroup.remove_child(data.shadow);
+            data.shadow.clear_effects();
+            data.shadow.destroy();
+        } catch (_) {
+            // Shadow actor may already be destroyed
+        }
     }
 
     if (data.timeoutId)
@@ -424,21 +450,28 @@ function onRemoveEffect(actor) {
 
 /** Recompute and push all shader uniforms for a single window. */
 function refreshRoundedCorners(actor) {
-    const win  = actor.metaWindow;
+    const win = actor.metaWindow;
+    if (!win) return;
+
     const data = _actorMap.get(actor);
     const fx   = getEffect(actor);
 
-    if (!fx) {
-        // Effect not yet added → try to add it now
+    // If neither the effect nor actor data exists, add the effect.
+    // Guard against re-entry: only call onAddEffect when there is no _actorMap
+    // entry yet (avoids the infinite loop onAddEffect → refreshRoundedCorners
+    // → onAddEffect …). onAddEffect calls refreshRoundedCorners itself at the
+    // end, so we just return here.
+    if (!fx && !data) {
         onAddEffect(actor);
         return;
     }
 
     if (shouldSkip(win)) {
-        onRemoveEffect(actor);
+        if (data) onRemoveEffect(actor);
         return;
     }
 
+    if (!fx) return;   // effect was removed due to shouldSkip during onAddEffect
     if (!fx.enabled) fx.enabled = true;
 
     const cfg = buildConfig();
