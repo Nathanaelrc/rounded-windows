@@ -42,7 +42,7 @@ import { RoundedCornersEffect, ClipShadowEffect } from './effect.js';
 // ─────────────────────────────────────────────────────────────────────────────
 const ROUNDED_CORNERS_EFFECT = 'rwc-rounded-corners';
 const CLIP_SHADOW_EFFECT      = 'rwc-clip-shadow';
-const SHADOW_PADDING          = 40;   // extra pixels around the shadow actor
+const SHADOW_PADDING          = 22;   // extra pixels around the shadow actor
 
 // ─────────────────────────────────────────────────────────────────────────────
 // Module-level state
@@ -202,17 +202,13 @@ function shouldSkip(win) {
 /**
  * Get the Clutter.Actor to which the rounded-corners effect should be applied.
  *
- * GNOME 50 is Wayland-only → always the WindowActor itself.
- * Earlier versions with X11: first child (the surface actor).
+ * Always the WindowActor itself.  For X11/XWayland windows this is
+ * critical: MetaWindowActorX11.paint() draws the compositor shadow
+ * BEFORE the surface child.  Placing the offscreen effect on the
+ * window actor ensures the FBO captures (and the shader can round)
+ * both the shadow and the surface in a single pass.
  */
 function targetActor(actor) {
-    try {
-        const win = actor.metaWindow;
-        if (win && win.get_client_type() === Meta.WindowClientType.X11)
-            return actor.get_first_child();
-    } catch (_) {
-        // metaWindow may become invalid during destroy
-    }
     return actor;
 }
 
@@ -284,10 +280,10 @@ function contentOffset(win) {
 function computeBounds(actor) {
     const [dx, dy, dw, dh] = contentOffset(actor.metaWindow);
     return {
-        x1: dx + 1,
-        y1: dy + 1,
-        x2: dx + actor.width  + dw - 1,
-        y2: dy + actor.height + dh - 1,
+        x1: dx,
+        y1: dy,
+        x2: dx + actor.width  + dw,
+        y2: dy + actor.height + dh,
     };
 }
 
@@ -393,7 +389,12 @@ function refreshShadowStyle(actor, shadowActor) {
                    ${cfg.padding.left   * cssScale}px;`;
 }
 
-/** Update the ClipShadowEffect bounds for a shadow actor. */
+/** Update the ClipShadowEffect bounds for a shadow actor.
+ *
+ * The clip now uses the same squircle parameters as the RoundedCornersEffect
+ * so the shadow is transparent exactly where the rounded corners are, with
+ * pixel-perfect anti-aliasing along the curved edge.
+ */
 function refreshShadowClip(actor, shadowActor) {
     if (!shadowActor) return;
 
@@ -404,17 +405,32 @@ function refreshShadowClip(actor, shadowActor) {
     const sh = shadowActor.height;
     if (sw <= 0 || sh <= 0) return;
 
-    // Content rect within the shadow actor in normalised coords
+    // Window content rect within the shadow actor in pixel coordinates
     const [dx, dy, dw, dh] = contentOffset(actor.metaWindow);
     const sc  = scaleFactor(actor.metaWindow);
     const pad = SHADOW_PADDING * sc;
 
-    const x1 = (pad + dx) / sw;
-    const y1 = (pad + dy) / sh;
-    const x2 = (pad + actor.width  + dw) / sw;
-    const y2 = (pad + actor.height + dh) / sh;
+    const cfg    = buildConfig();
+    const outerR = cfg.cornerRadius * sc;
 
-    effect.setClip(x1, y1, x2, y2);
+    // Use the same exponent / radius formulae as RoundedCornersEffect
+    // so the clip contour is identical to the rounded corners shader.
+    let exponent = cfg.smoothing * 10 + 2;
+    let radius   = outerR * 0.5 * exponent;
+
+    // Account for padding inset (same as RoundedCornersEffect)
+    const bx1 = pad + dx + cfg.padding.left   * sc;
+    const by1 = pad + dy + cfg.padding.top    * sc;
+    const bx2 = pad + dx + actor.width  + dw - cfg.padding.right  * sc;
+    const by2 = pad + dy + actor.height + dh - cfg.padding.bottom * sc;
+
+    const maxR = Math.min(bx2 - bx1, by2 - by1) / 2;
+    if (maxR > 0 && radius > maxR) {
+        exponent *= maxR / radius;
+        radius    = maxR;
+    }
+
+    effect.setClip([bx1, by1, bx2, by2], radius, exponent);
 }
 
 // ─────────────────────────────────────────────────────────────────────────────

@@ -6,6 +6,7 @@
  */
 
 import Adw from 'gi://Adw';
+import Gdk from 'gi://Gdk';
 import GLib from 'gi://GLib';
 import GObject from 'gi://GObject';
 import Gtk from 'gi://Gtk';
@@ -162,7 +163,7 @@ export default class RoundedWindowsPreferences extends ExtensionPreferences {
         });
         // Read initial colour from settings
         const updateColorBtn = () => {
-            const rgba = new Gtk.Rgba();
+            const rgba    = new Gdk.RGBA();
             rgba.red   = settings.get_double('border-red');
             rgba.green = settings.get_double('border-green');
             rgba.blue  = settings.get_double('border-blue');
