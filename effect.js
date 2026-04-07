@@ -162,11 +162,6 @@ const SHADOW_CODE = /* glsl */`
 // add_glsl_snippet() goes in vfunc_build_pipeline() (operates on base_pipeline).
 // get_uniform_location() is deferred to first updateUniforms() call, because
 // priv->pipeline does not exist yet during build_pipeline in GNOME 50.
-//
-// HiDPI / fractional scaling:
-// ClutterOffscreenEffect creates the FBO at logical resolution by default.
-// We override vfunc_create_texture() to create it at physical resolution
-// (logical × resource_scale) so the output is never upscaled → no blur.
 // ─────────────────────────────────────────────────────────────────────────────
 export const RoundedCornersEffect = GObject.registerClass(
     { GTypeName: 'RWCRoundedCornersEffect' },
@@ -183,26 +178,6 @@ export const RoundedCornersEffect = GObject.registerClass(
             );
             // Do NOT call get_uniform_location() here.
             // priv->pipeline is NULL during build_pipeline in GNOME 50.
-        }
-
-        /**
-         * Create the offscreen FBO texture at physical (HiDPI-aware) resolution.
-         * Without this override, ClutterOffscreenEffect uses logical pixels and
-         * the compositor upscales the result → blurry windows at >100% scale.
-         */
-        vfunc_create_texture(width, height) {
-            const rs = this.actor ? (this.actor.get_resource_scale() ?? 1) : 1;
-            const physW = Math.ceil(width  * rs);
-            const physH = Math.ceil(height * rs);
-            const ctx   = this.actor
-                ? this.actor.get_context().get_backend().get_cogl_context()
-                : null;
-            if (!ctx) return super.vfunc_create_texture(width, height);
-            try {
-                return Cogl.Texture2D.new_with_size(ctx, physW, physH);
-            } catch (_) {
-                return super.vfunc_create_texture(width, height);
-            }
         }
 
         _ensureUniforms() {
@@ -246,47 +221,30 @@ export const RoundedCornersEffect = GObject.registerClass(
             let borderInnerR = outerR - Math.abs(bw);
             if (borderInnerR < 0.001) borderInnerR = 0.0;
 
-            // Use the physical FBO dimensions for pixelStep so the shader
-            // coordinates match the actual texture resolution (HiDPI-correct).
-            const rs     = this.actor ? (this.actor.get_resource_scale() ?? 1) : 1;
-            const actorW = this.actor.get_width()  * rs;
-            const actorH = this.actor.get_height() * rs;
+            const actorW = this.actor.get_width();
+            const actorH = this.actor.get_height();
             const ps = [
                 actorW > 0 ? 1 / actorW : 1,
                 actorH > 0 ? 1 / actorH : 1,
             ];
 
-            // Scale bounds and radii to physical pixels for the shader
-            const physScale = scaleFactor * rs;
-            const bPhys = [
-                windowBounds.x1 * rs + padding.left   * physScale,
-                windowBounds.y1 * rs + padding.top    * physScale,
-                windowBounds.x2 * rs - padding.right  * physScale,
-                windowBounds.y2 * rs - padding.bottom * physScale,
-            ];
-            const bwPhys = cfg.borderWidth * physScale;
-            const bbPhys = [bPhys[0] + bwPhys, bPhys[1] + bwPhys, bPhys[2] - bwPhys, bPhys[3] - bwPhys];
-            const outerRPhys = cfg.cornerRadius * physScale;
-
             let exponent = smoothing * 10 + 2;
-            let radius   = outerRPhys * 0.5 * exponent;
-            const maxR   = Math.min(bPhys[2] - bPhys[0], bPhys[3] - bPhys[1]) / 2;
+            let radius   = outerR * 0.5 * exponent;
+            const maxR   = Math.min(b[2] - b[0], b[3] - b[1]) / 2;
             if (maxR > 0 && radius > maxR) {
                 exponent *= maxR / radius;
                 radius    = maxR;
             }
-            let borderInnerRPhys = outerRPhys - Math.abs(bwPhys);
-            if (borderInnerRPhys < 0.001) borderInnerRPhys = 0.0;
-            if (outerRPhys > 0)
-                borderInnerRPhys *= radius / outerRPhys;
+            if (outerR > 0)
+                borderInnerR *= radius / outerR;
 
             const u = this._u;
-            this.set_uniform_float(u.bounds,                 4, bPhys);
+            this.set_uniform_float(u.bounds,                 4, b);
             this.set_uniform_float(u.clipRadius,             1, [radius]);
-            this.set_uniform_float(u.borderWidth,            1, [bwPhys]);
+            this.set_uniform_float(u.borderWidth,            1, [bw]);
             this.set_uniform_float(u.borderColor,            4, bc);
-            this.set_uniform_float(u.borderedAreaBounds,     4, bbPhys);
-            this.set_uniform_float(u.borderedAreaClipRadius, 1, [borderInnerRPhys]);
+            this.set_uniform_float(u.borderedAreaBounds,     4, bb);
+            this.set_uniform_float(u.borderedAreaClipRadius, 1, [borderInnerR]);
             this.set_uniform_float(u.pixelStep,              2, ps);
             this.set_uniform_float(u.exponent,               1, [exponent]);
             this.queue_repaint();
