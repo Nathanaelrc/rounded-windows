@@ -16,14 +16,13 @@ jobs:
         run: |
           UUID="rounded-windows@marcosgt.github.io"
           mkdir -p dist
-          zip -j "dist/${UUID}.zip" \
+          zip -r "dist/${UUID}.zip" \
             extension.js \
             effect.js \
             prefs.js \
             metadata.json \
             stylesheet.css \
-            schemas/gschemas.compiled \
-            "schemas/org.gnome.shell.extensions.rounded-windows.gschema.xml"
+            schemas/
 
       - name: Create GitHub Release
         uses: softprops/action-gh-release@v2
