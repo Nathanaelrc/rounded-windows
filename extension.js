@@ -202,14 +202,27 @@ function shouldSkip(win) {
 /**
  * Get the Clutter.Actor to which the rounded-corners effect should be applied.
  *
- * Always the WindowActor itself.  For X11/XWayland windows this is
- * critical: MetaWindowActorX11.paint() draws the compositor shadow
- * BEFORE the surface child.  Placing the offscreen effect on the
- * window actor ensures the FBO captures (and the shader can round)
- * both the shadow and the surface in a single pass.
+ * For Wayland windows the effect goes on the WindowActor itself.
+ *
+ * For X11/XWayland windows the effect goes on the *first child* (the surface
+ * actor), NOT on the WindowActor.  Reason: MetaWindowActor for X11 composites
+ * the Mutter-drawn server shadow into the same buffer as the window surface.
+ * If the GLSLEffect FBO captures that shadow the outermost pixel rows/columns
+ * of the FBO are semi-transparent (shadow feather), which leaks through as a
+ * visible transparent fringe around the window — most noticeably a thin line
+ * along the bottom edge.  This problem is especially pronounced in
+ * Electron/Chromium apps (Teams for Linux, VS Code, Chrome, Brave …) because
+ * their opaque backgrounds make the contrast with the transparent fringe very
+ * visible.  Applying the effect only to the surface child keeps the Mutter
+ * shadow completely outside the FBO, so the shader sees only clean window
+ * pixels and can round them without any artefacts.
  */
 function targetActor(actor) {
-    return actor;
+    const win = actor.metaWindow;
+    if (!win) return actor;
+    return win.get_client_type() === Meta.WindowClientType.X11
+        ? actor.get_first_child()
+        : actor;
 }
 
 /** Get the RoundedCornersEffect attached to a window actor (or null). */
@@ -272,13 +285,42 @@ function contentOffset(win) {
 }
 
 /**
- * Compute the shader bounds (x1, y1, x2, y2) in *actor-local* pixel coords,
- * taking the CSD buffer/frame difference into account.
- * Inset by 1px on all sides to avoid rendering the edge texels of the
- * offscreen FBO, which may be partially transparent.
+ * Compute the shader bounds (x1, y1, x2, y2) in *target-actor-local* pixel
+ * coords.
+ *
+ * For Wayland windows the target actor IS the WindowActor, so the buffer/frame
+ * offset must be applied to account for CSD invisible resize grips.
+ *
+ * For X11/XWayland windows the target actor is the *first child* (the surface
+ * actor).  The surface child always starts at (0, 0) and its size equals the
+ * frame rect — there is no CSD offset to worry about.  A 1px inset is still
+ * applied on all sides to avoid rendering the outermost texels of the FBO,
+ * which can be partially transparent due to sub-pixel anti-aliasing at the
+ * window edge.
  */
 function computeBounds(actor) {
-    const [dx, dy, dw, dh] = contentOffset(actor.metaWindow);
+    const win = actor.metaWindow;
+    const isX11 = win.get_client_type() === Meta.WindowClientType.X11;
+
+    if (isX11) {
+        // Target is first_child: its own coordinate space starts at (0,0)
+        // and its size equals the frame rect (no CSD offset).
+        // Apply a 1px inset to avoid transparent edge texels from sub-pixel
+        // anti-aliasing at the window boundary.
+        const sc     = scaleFactor(win);
+        const child  = actor.get_first_child();
+        const w = child ? child.width  : actor.width;
+        const h = child ? child.height : actor.height;
+        return {
+            x1: sc,
+            y1: sc,
+            x2: w - sc,
+            y2: h - sc,
+        };
+    }
+
+    // Wayland: target is the WindowActor itself.
+    const [dx, dy, dw, dh] = contentOffset(win);
     return {
         x1: dx,
         y1: dy,
@@ -405,10 +447,12 @@ function refreshShadowClip(actor, shadowActor) {
     const sh = shadowActor.height;
     if (sw <= 0 || sh <= 0) return;
 
-    // Window content rect within the shadow actor in pixel coordinates
-    const [dx, dy, dw, dh] = contentOffset(actor.metaWindow);
-    const sc  = scaleFactor(actor.metaWindow);
+    // Window content rect within the shadow actor in pixel coordinates.
+    // Must mirror the same coordinate system used by computeBounds().
+    const win = actor.metaWindow;
+    const sc  = scaleFactor(win);
     const pad = SHADOW_PADDING * sc;
+    const isX11 = win.get_client_type() === Meta.WindowClientType.X11;
 
     const cfg    = buildConfig();
     const outerR = cfg.cornerRadius * sc;
@@ -418,11 +462,30 @@ function refreshShadowClip(actor, shadowActor) {
     let exponent = cfg.smoothing * 10 + 2;
     let radius   = outerR * 0.5 * exponent;
 
+    let rawX1, rawY1, rawX2, rawY2;
+    if (isX11) {
+        // X11: bounds are relative to first_child, which is (0,0)-based
+        // with a 1px inset.  The shadow actor is positioned via
+        // BindConstraint to the WindowActor, so we need to offset by the
+        // same contentOffset that positions the actor within the buffer.
+        const [dx, dy, dw, dh] = contentOffset(win);
+        rawX1 = pad + dx + sc;
+        rawY1 = pad + dy + sc;
+        rawX2 = pad + dx + actor.width  + dw - sc;
+        rawY2 = pad + dy + actor.height + dh - sc;
+    } else {
+        const [dx, dy, dw, dh] = contentOffset(win);
+        rawX1 = pad + dx;
+        rawY1 = pad + dy;
+        rawX2 = pad + dx + actor.width  + dw;
+        rawY2 = pad + dy + actor.height + dh;
+    }
+
     // Account for padding inset (same as RoundedCornersEffect)
-    const bx1 = pad + dx + cfg.padding.left   * sc;
-    const by1 = pad + dy + cfg.padding.top    * sc;
-    const bx2 = pad + dx + actor.width  + dw - cfg.padding.right  * sc;
-    const by2 = pad + dy + actor.height + dh - cfg.padding.bottom * sc;
+    const bx1 = rawX1 + cfg.padding.left   * sc;
+    const by1 = rawY1 + cfg.padding.top    * sc;
+    const bx2 = rawX2 - cfg.padding.right  * sc;
+    const by2 = rawY2 - cfg.padding.bottom * sc;
 
     const maxR = Math.min(bx2 - bx1, by2 - by1) / 2;
     if (maxR > 0 && radius > maxR) {
