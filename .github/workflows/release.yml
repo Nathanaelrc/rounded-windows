@@ -1,0 +1,44 @@
+name: Package & Release
+
+on:
+  push:
+    tags:
+      - "v*"
+
+jobs:
+  release:
+    runs-on: ubuntu-latest
+
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: Build extension zip
+        run: |
+          UUID="rounded-windows@marcosgt.github.io"
+          mkdir -p dist
+          zip -j "dist/${UUID}.zip" \
+            extension.js \
+            effect.js \
+            prefs.js \
+            metadata.json \
+            stylesheet.css \
+            schemas/gschemas.compiled \
+            "schemas/org.gnome.shell.extensions.rounded-windows.gschema.xml"
+
+      - name: Create GitHub Release
+        uses: softprops/action-gh-release@v2
+        with:
+          files: dist/rounded-windows@marcosgt.github.io.zip
+          body: |
+            ## Instalación
+
+            1. Descarga el archivo `.zip`
+            2. Ve a https://extensions.gnome.org/local/ y usa **Instalar desde archivo**,
+               o ejecuta:
+               ```bash
+               gnome-extensions install rounded-windows@marcosgt.github.io.zip
+               ```
+
+            ---
+            Para publicar en extensions.gnome.org, sube el `.zip` manualmente en:
+            https://extensions.gnome.org/upload/
