@@ -150,8 +150,8 @@ function shouldSkip(win) {
     } catch (_) {}
 
     const wmClass = win.get_wm_class_instance();
-    if (wmClass == null)
-        return true;   // not yet initialised
+    if (!wmClass)
+        return true;   // null or empty string – not yet initialised
 
     // Only process normal application windows
     const normalTypes = [
@@ -691,16 +691,28 @@ function attachWindowSignals(actor) {
 }
 
 function applyEffectTo(actor) {
-    // Wayland XWayland windows may not have a surface child yet
+    // Wayland / XWayland windows may not have a surface child yet.
     if (!actor.firstChild) {
         const connId = actor.connect('notify::first-child', () => {
-            applyEffectTo(actor);
             actor.disconnect(connId);
+            applyEffectTo(actor);
         });
         return;
     }
 
-    if (!actor.get_texture()) return;
+    if (!actor.get_texture()) {
+        // The compositor texture is not ready yet.  This happens with Qt /
+        // OpenGL-accelerated X11 apps (VirtualBox, Qt-GL, some Chromium builds)
+        // where the window is mapped before its first paint arrives.
+        // Wait for the actor's size to change (first paint / resize), then retry.
+        // We disconnect before retrying to avoid double-applying the effect.
+        let connId;
+        connId = actor.connect('notify::size', () => {
+            actor.disconnect(connId);
+            applyEffectTo(actor);
+        });
+        return;
+    }
 
     // Add the effect FIRST, then connect signals. If signals were connected
     // before the effect, adding the effect could trigger notify::size
@@ -731,10 +743,13 @@ function enableEffect() {
     addConnection(global.display, 'window-created',
         (_, win) => {
             const actor = win.get_compositor_private();
-            if (win.get_wm_class_instance() == null) {
+            // get_wm_class_instance() may return null *or* an empty string
+            // for apps (Qt, Electron) that set WM_CLASS asynchronously.
+            // In both cases wait for the property to arrive before applying.
+            if (!win.get_wm_class_instance()) {
                 const nid = win.connect('notify::wm-class', () => {
-                    applyEffectTo(actor);
                     win.disconnect(nid);
+                    applyEffectTo(actor);
                 });
             } else {
                 applyEffectTo(actor);
