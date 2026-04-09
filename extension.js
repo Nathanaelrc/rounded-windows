@@ -202,27 +202,41 @@ function shouldSkip(win) {
 /**
  * Get the Clutter.Actor to which the rounded-corners effect should be applied.
  *
- * For Wayland windows the effect goes on the WindowActor itself.
+ * The decision depends on whether the X11 window has a WM (server-side) frame:
  *
- * For X11/XWayland windows the effect goes on the *first child* (the surface
- * actor), NOT on the WindowActor.  Reason: MetaWindowActor for X11 composites
- * the Mutter-drawn server shadow into the same buffer as the window surface.
- * If the GLSLEffect FBO captures that shadow the outermost pixel rows/columns
- * of the FBO are semi-transparent (shadow feather), which leaks through as a
- * visible transparent fringe around the window — most noticeably a thin line
- * along the bottom edge.  This problem is especially pronounced in
- * Electron/Chromium apps (Teams for Linux, VS Code, Chrome, Brave …) because
- * their opaque backgrounds make the contrast with the transparent fringe very
- * visible.  Applying the effect only to the surface child keeps the Mutter
- * shadow completely outside the FBO, so the shader sees only clean window
- * pixels and can round them without any artefacts.
+ * • Wayland-native windows: effect on the WindowActor itself.
+ *
+ * • X11/XWayland WITH a WM frame (e.g. VirtualBox, OBS, Qt apps, GTK2 apps):
+ *   `get_frame_bounds()` returns a non-null region.  The WM frame (title bar,
+ *   borders) is composited into the WindowActor together with the client area.
+ *   We must apply the effect to the WindowActor so that the shader rounds the
+ *   full visible frame, not just the raw client surface.
+ *
+ * • X11/XWayland WITHOUT a WM frame (CSD or undecorated apps — Electron,
+ *   Chromium, Teams for Linux, VS Code …):
+ *   `get_frame_bounds()` returns null, `is_client_decorated()` is true (or
+ *   `decorated` is false).  Mutter still draws its own drop-shadow on the
+ *   WindowActor, which bleeds into the outermost FBO pixels as a transparent
+ *   fringe.  To avoid that artefact we apply the effect to the *first child*
+ *   (MetaSurfaceActor), which contains only the window surface — beyond the
+ *   reach of Mutter's compositor shadow.
  */
 function targetActor(actor) {
     const win = actor.metaWindow;
     if (!win) return actor;
-    return win.get_client_type() === Meta.WindowClientType.X11
-        ? actor.get_first_child()
-        : actor;
+
+    if (win.get_client_type() !== Meta.WindowClientType.X11)
+        return actor;   // Wayland native
+
+    // X11: check for a WM (server-side) frame.
+    // get_frame_bounds() returns null when there is no WM frame.
+    const hasWmFrame = win.get_frame_bounds() !== null;
+    if (hasWmFrame)
+        return actor;   // WM-decorated X11: effect on the full WindowActor
+
+    // Undecorated / CSD X11 (Electron, Chromium …):
+    // apply to the surface child to keep Mutter's shadow out of the FBO.
+    return actor.get_first_child() ?? actor;
 }
 
 /** Get the RoundedCornersEffect attached to a window actor (or null). */
@@ -286,40 +300,41 @@ function contentOffset(win) {
 
 /**
  * Compute the shader bounds (x1, y1, x2, y2) in *target-actor-local* pixel
- * coords.
+ * coords.  The target actor is determined by targetActor().
  *
- * For Wayland windows the target actor IS the WindowActor, so the buffer/frame
- * offset must be applied to account for CSD invisible resize grips.
+ * Three cases:
  *
- * For X11/XWayland windows the target actor is the *first child* (the surface
- * actor).  The surface child always starts at (0, 0) and its size equals the
- * frame rect — there is no CSD offset to worry about.  A 1px inset is still
- * applied on all sides to avoid rendering the outermost texels of the FBO,
- * which can be partially transparent due to sub-pixel anti-aliasing at the
- * window edge.
+ * 1. Wayland-native   → target = WindowActor.
+ *    Apply the buffer/frame contentOffset to skip invisible CSD resize grips.
+ *
+ * 2. X11 WITH WM frame → target = WindowActor.
+ *    Same as Wayland: the frame+client area is already the full actor size.
+ *    No inset needed — the WM frame pixels are clean.
+ *
+ * 3. X11 WITHOUT WM frame (Electron/Chromium) → target = first_child.
+ *    The surface starts at (0,0) in its own coordinate space.
+ *    Apply a 1px inset to hide the outermost FBO texels, which can be
+ *    partially transparent due to Mutter's compositor shadow on the parent
+ *    WindowActor leaking in via sub-pixel anti-aliasing.
  */
 function computeBounds(actor) {
     const win = actor.metaWindow;
-    const isX11 = win.get_client_type() === Meta.WindowClientType.X11;
 
-    if (isX11) {
-        // Target is first_child: its own coordinate space starts at (0,0)
-        // and its size equals the frame rect (no CSD offset).
-        // Apply a 1px inset to avoid transparent edge texels from sub-pixel
-        // anti-aliasing at the window boundary.
-        const sc     = scaleFactor(win);
-        const child  = actor.get_first_child();
-        const w = child ? child.width  : actor.width;
-        const h = child ? child.height : actor.height;
-        return {
-            x1: sc,
-            y1: sc,
-            x2: w - sc,
-            y2: h - sc,
-        };
+    if (win.get_client_type() === Meta.WindowClientType.X11) {
+        const hasWmFrame = win.get_frame_bounds() !== null;
+
+        if (!hasWmFrame) {
+            // Case 3: undecorated X11 (Electron …) — target is first_child.
+            const sc    = scaleFactor(win);
+            const child = actor.get_first_child();
+            const w     = child ? child.width  : actor.width;
+            const h     = child ? child.height : actor.height;
+            return { x1: sc, y1: sc, x2: w - sc, y2: h - sc };
+        }
+        // Case 2: WM-decorated X11 — target is WindowActor, same as Wayland.
     }
 
-    // Wayland: target is the WindowActor itself.
+    // Case 1 & 2: target is the WindowActor itself.
     const [dx, dy, dw, dh] = contentOffset(win);
     return {
         x1: dx,
@@ -448,11 +463,12 @@ function refreshShadowClip(actor, shadowActor) {
     if (sw <= 0 || sh <= 0) return;
 
     // Window content rect within the shadow actor in pixel coordinates.
-    // Must mirror the same coordinate system used by computeBounds().
+    // Must mirror exactly the same coordinate system used by computeBounds().
+    // The shadow actor is positioned via BindConstraint to the WindowActor,
+    // so all bounds here are expressed in WindowActor coordinates + pad offset.
     const win = actor.metaWindow;
     const sc  = scaleFactor(win);
     const pad = SHADOW_PADDING * sc;
-    const isX11 = win.get_client_type() === Meta.WindowClientType.X11;
 
     const cfg    = buildConfig();
     const outerR = cfg.cornerRadius * sc;
@@ -463,17 +479,22 @@ function refreshShadowClip(actor, shadowActor) {
     let radius   = outerR * 0.5 * exponent;
 
     let rawX1, rawY1, rawX2, rawY2;
-    if (isX11) {
-        // X11: bounds are relative to first_child, which is (0,0)-based
-        // with a 1px inset.  The shadow actor is positioned via
-        // BindConstraint to the WindowActor, so we need to offset by the
-        // same contentOffset that positions the actor within the buffer.
+
+    const isX11NoFrame =
+        win.get_client_type() === Meta.WindowClientType.X11 &&
+        win.get_frame_bounds() === null;
+
+    if (isX11NoFrame) {
+        // Undecorated X11 (Electron): shader target is first_child.
+        // The shadow actor is still bound to the WindowActor, so map
+        // first_child bounds (0+inset … w-inset) into shadow-actor coords.
         const [dx, dy, dw, dh] = contentOffset(win);
         rawX1 = pad + dx + sc;
         rawY1 = pad + dy + sc;
         rawX2 = pad + dx + actor.width  + dw - sc;
         rawY2 = pad + dy + actor.height + dh - sc;
     } else {
+        // Wayland or WM-decorated X11: shader target is the WindowActor.
         const [dx, dy, dw, dh] = contentOffset(win);
         rawX1 = pad + dx;
         rawY1 = pad + dy;
