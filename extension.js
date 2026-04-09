@@ -207,19 +207,18 @@ function shouldSkip(win) {
  * • Wayland-native windows: effect on the WindowActor itself.
  *
  * • X11/XWayland WITH a WM frame (e.g. VirtualBox, OBS, Qt apps, GTK2 apps):
- *   `get_frame_bounds()` returns a non-null region.  The WM frame (title bar,
- *   borders) is composited into the WindowActor together with the client area.
- *   We must apply the effect to the WindowActor so that the shader rounds the
- *   full visible frame, not just the raw client surface.
+ *   `win.decorated` is true.  The WM frame (title bar, borders) is composited
+ *   into the WindowActor together with the client area.  We must apply the
+ *   effect to the WindowActor so that the shader rounds the full visible frame,
+ *   not just the raw client surface.
  *
- * • X11/XWayland WITHOUT a WM frame (CSD or undecorated apps — Electron,
- *   Chromium, Teams for Linux, VS Code …):
- *   `get_frame_bounds()` returns null, `is_client_decorated()` is true (or
- *   `decorated` is false).  Mutter still draws its own drop-shadow on the
- *   WindowActor, which bleeds into the outermost FBO pixels as a transparent
- *   fringe.  To avoid that artefact we apply the effect to the *first child*
- *   (MetaSurfaceActor), which contains only the window surface — beyond the
- *   reach of Mutter's compositor shadow.
+ * • X11/XWayland WITHOUT a WM frame (undecorated apps — Electron with
+ *   frame:false, some games, custom-chrome apps …):
+ *   `win.decorated` is false.  Mutter still draws its own compositor shadow on
+ *   the WindowActor, which bleeds into the outermost FBO pixels as a
+ *   transparent fringe.  To avoid that artefact we apply the effect to the
+ *   *first child* (MetaSurfaceActor), which contains only the window surface —
+ *   beyond the reach of Mutter's compositor shadow.
  */
 function targetActor(actor) {
     const win = actor.metaWindow;
@@ -228,13 +227,12 @@ function targetActor(actor) {
     if (win.get_client_type() !== Meta.WindowClientType.X11)
         return actor;   // Wayland native
 
-    // X11: check for a WM (server-side) frame.
-    // get_frame_bounds() returns null when there is no WM frame.
-    const hasWmFrame = win.get_frame_bounds() !== null;
-    if (hasWmFrame)
+    // X11: `win.decorated` is true when Mutter draws a server-side frame
+    // (title bar, borders) around the window.
+    if (win.decorated)
         return actor;   // WM-decorated X11: effect on the full WindowActor
 
-    // Undecorated / CSD X11 (Electron, Chromium …):
+    // Undecorated X11 (Electron with frame:false, etc.):
     // apply to the surface child to keep Mutter's shadow out of the FBO.
     return actor.get_first_child() ?? actor;
 }
@@ -311,20 +309,18 @@ function contentOffset(win) {
  *    Same as Wayland: the frame+client area is already the full actor size.
  *    No inset needed — the WM frame pixels are clean.
  *
- * 3. X11 WITHOUT WM frame (Electron/Chromium) → target = first_child.
- *    The surface starts at (0,0) in its own coordinate space.
- *    Apply a 1px inset to hide the outermost FBO texels, which can be
- *    partially transparent due to Mutter's compositor shadow on the parent
- *    WindowActor leaking in via sub-pixel anti-aliasing.
+ * 3. X11 WITHOUT WM frame / undecorated (win.decorated === false) →
+ *    target = first_child.  The surface starts at (0,0) in its own
+ *    coordinate space.  Apply a 1px inset to hide the outermost FBO texels,
+ *    which can be partially transparent due to Mutter's compositor shadow
+ *    on the parent WindowActor leaking in via sub-pixel anti-aliasing.
  */
 function computeBounds(actor) {
     const win = actor.metaWindow;
 
     if (win.get_client_type() === Meta.WindowClientType.X11) {
-        const hasWmFrame = win.get_frame_bounds() !== null;
-
-        if (!hasWmFrame) {
-            // Case 3: undecorated X11 (Electron …) — target is first_child.
+        if (!win.decorated) {
+            // Case 3: undecorated X11 (Electron with frame:false …) — target is first_child.
             const sc    = scaleFactor(win);
             const child = actor.get_first_child();
             const w     = child ? child.width  : actor.width;
@@ -482,7 +478,7 @@ function refreshShadowClip(actor, shadowActor) {
 
     const isX11NoFrame =
         win.get_client_type() === Meta.WindowClientType.X11 &&
-        win.get_frame_bounds() === null;
+        !win.decorated;
 
     if (isX11NoFrame) {
         // Undecorated X11 (Electron): shader target is first_child.
