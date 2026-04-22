@@ -300,7 +300,7 @@ This extension was built by studying and adapting code from several open-source 
 | [Mutter](https://gitlab.gnome.org/GNOME/mutter) | GNOME | Understanding of MetaWindowActorX11 paint cycle, shadow architecture (focused/unfocused), FBO pipeline |
 | [GNOME Shell](https://gitlab.gnome.org/GNOME/gnome-shell) | GNOME | Shell.GLSLEffect usage patterns, ExtensionPreferences API |
 
-The squircle shader, shadow clipping with squircle masking, GNOME 50 / Mutter 18 compatibility fixes, GSettings schema, preferences UI, and installation script were completely rewritten and heavily modified by me (Marcos / Nathanaelrc) to bring this project to life and ensure compatibility with modern GNOME environments. While it stands on the shoulders of giants, this specific implementation and its novel improvements are my own work.
+The squircle shader, shadow clipping with squircle masking, GNOME 50 / Mutter 18 compatibility fixes, GSettings schema, preferences UI, and installation script were completely rewritten and heavily modified to bring this project to life and ensure compatibility with modern GNOME environments. While it stands on the shoulders of giants, this specific implementation and its novel improvements are my own work.
 
 ---
 
