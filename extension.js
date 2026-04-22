@@ -224,7 +224,14 @@ function shouldSkip(win) {
  *     is just the client window — equally correct.
  */
 function targetActor(actor) {
-    return actor; // Always apply effect to the MetaWindowActor directly
+    const win = actor.metaWindow;
+    if (win && win.get_client_type) {
+        // Meta.WindowClientType.WAYLAND === 1
+        if (win.get_client_type() !== 1) {
+            return actor.get_first_child() || actor;
+        }
+    }
+    return actor;
 }
 
 /** Get the RoundedCornersEffect attached to a window actor (or null). */
