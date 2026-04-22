@@ -42,7 +42,7 @@ import { RoundedCornersEffect, ClipShadowEffect } from './effect.js';
 // ─────────────────────────────────────────────────────────────────────────────
 const ROUNDED_CORNERS_EFFECT = 'rwc-rounded-corners';
 const CLIP_SHADOW_EFFECT      = 'rwc-clip-shadow';
-const SHADOW_PADDING          = 22;   // extra pixels around the shadow actor
+const SHADOW_PADDING          = 80;   // extra pixels around the shadow actor
 
 // ─────────────────────────────────────────────────────────────────────────────
 // Module-level state
@@ -224,13 +224,7 @@ function shouldSkip(win) {
  *     is just the client window — equally correct.
  */
 function targetActor(actor) {
-    const win = actor.metaWindow;
-    if (!win) return actor;
-
-    if (win.get_client_type() === Meta.WindowClientType.X11)
-        return actor.get_first_child() ?? actor;
-
-    return actor;   // Wayland native
+    return actor; // Always apply effect to the MetaWindowActor directly
 }
 
 /** Get the RoundedCornersEffect attached to a window actor (or null). */
@@ -300,30 +294,32 @@ function contentOffset(win) {
  *   Apply the buffer/frame contentOffset to skip invisible CSD resize grips.
  *
  * • ALL X11/XWayland → target = first_child (MetaSurfaceActor).
- *   The surface texture starts at (0,0) and its dimensions equal the full
- *   visible window (including WM frame for decorated windows).  A 1px inset
- *   is applied on all sides to avoid rendering the outermost FBO texels,
- *   which can be partially transparent.
+ *   For WM-decorated windows (Qt, GTK2, VirtualBox…) contentOffset gives the
+ *   delta between buffer and frame rects; we use it to skip the transparent
+ *   FBO fringe.  For CSD/undecorated windows the offset is (0,0,0,0) and a
+ *   1 px inset is used to avoid rendering the semitransparent edge texels.
  */
 function computeBounds(actor) {
     const win = actor.metaWindow;
-
-    if (win.get_client_type() === Meta.WindowClientType.X11) {
-        const sc    = scaleFactor(win);
-        const child = actor.get_first_child();
-        const w     = child ? child.width  : actor.width;
-        const h     = child ? child.height : actor.height;
-        return { x1: sc, y1: sc, x2: w - sc, y2: h - sc };
-    }
-
-    // Wayland: target is the WindowActor itself.
+    const sc  = scaleFactor(win);
+    
     const [dx, dy, dw, dh] = contentOffset(win);
-    return {
-        x1: dx,
-        y1: dy,
-        x2: dx + actor.width  + dw,
-        y2: dy + actor.height + dh,
-    };
+    // When drawing straight to the MetaWindowActor, its size is actor.width/height.
+    // The frame area starts at (dx, dy) inside the actor, because dx/dy is the
+    // buffer padding (Mutter drop shadow for X11, resize grips for Wayland CSD).
+    let x1 = dx;
+    let y1 = dy;
+    let x2 = dx + actor.width  + dw;
+    let y2 = dy + actor.height + dh;
+
+    // Apply a 1px anti-aliasing inset if the window has no buffer padding
+    // in that direction to avoid drawing semitransparent texture edge pixels.
+    if (x1 === 0) x1 += sc;
+    if (y1 === 0) y1 += sc;
+    if (x2 === actor.width)  x2 -= sc;
+    if (y2 === actor.height) y2 -= sc;
+
+    return { x1, y1, x2, y2 };
 }
 
 // ─────────────────────────────────────────────────────────────────────────────
@@ -345,6 +341,7 @@ function createShadow(actor) {
     // Outer bin: provides extra padding so the shadow can extend outside
     const shadow = new St.Bin({
         name: 'RWC Shadow',
+        style: 'background: transparent;',
     });
 
     // Inner bin: the actual CSS shadow is applied here
@@ -353,16 +350,14 @@ function createShadow(actor) {
     shadow.set_child(inner);
 
     // Bind x, y, width, height to the window actor (with padding offsets)
-    const [dx, dy, dw, dh] = contentOffset(actor.metaWindow);
-    const sc = scaleFactor(actor.metaWindow);
+    // The window frame is offset from the actor by `contentOffset` (dx, dy).
+    // We pad the shadow actor by SHADOW_PADDING.
+    const win = actor.metaWindow;
+    const sc = scaleFactor(win);
     const pad = SHADOW_PADDING * sc;
 
-    const offsets = [
-        dx - pad,      // X
-        dy - pad,      // Y
-        dw + 2 * pad,  // WIDTH
-        dh + 2 * pad,  // HEIGHT
-    ];
+    const [dx, dy, dw, dh] = contentOffset(win);
+    const offsets = [dx - pad, dy - pad, dw + 2 * pad, dh + 2 * pad];
 
     for (let i = 0; i < 4; i++) {
         shadow.add_constraint(new Clutter.BindConstraint({
@@ -440,10 +435,6 @@ function refreshShadowClip(actor, shadowActor) {
     const effect = shadowActor.get_effect(CLIP_SHADOW_EFFECT);
     if (!effect) return;
 
-    const sw = shadowActor.width;
-    const sh = shadowActor.height;
-    if (sw <= 0 || sh <= 0) return;
-
     // Window content rect within the shadow actor in pixel coordinates.
     // Must mirror exactly the same coordinate system used by computeBounds().
     // The shadow actor is positioned via BindConstraint to the WindowActor,
@@ -451,6 +442,19 @@ function refreshShadowClip(actor, shadowActor) {
     const win = actor.metaWindow;
     const sc  = scaleFactor(win);
     const pad = SHADOW_PADDING * sc;
+
+    // Compute shadow actor dimensions directly from the WindowActor rather than
+    // reading shadowActor.width / shadowActor.height.  BindConstraints are
+    // resolved on the next Clutter layout pass, so the shadow actor's allocated
+    // size is still 0 on the very first call — this is the root cause of the
+    // gray-rectangle bug on Qt / OpenGL X11 windows (VirtualBox etc.) that go
+    // through the deferred applyEffectTo path (waiting for notify::size).
+    // createShadow() sets BindConstraint offsets [dx-pad, dy-pad, dw+2*pad,
+    // dh+2*pad], so shadow dimensions = actor.{width,height} + {dw,dh} + 2*pad.
+    const [, , dw, dh] = contentOffset(win);
+    const sw = actor.width  + dw + 2 * pad;
+    const sh = actor.height + dh + 2 * pad;
+    if (sw <= 0 || sh <= 0) return;
 
     const cfg    = buildConfig();
     const outerR = cfg.cornerRadius * sc;
@@ -460,27 +464,15 @@ function refreshShadowClip(actor, shadowActor) {
     let exponent = cfg.smoothing * 10 + 2;
     let radius   = outerR * 0.5 * exponent;
 
-    let rawX1, rawY1, rawX2, rawY2;
-
-    const isX11 = win.get_client_type() === Meta.WindowClientType.X11;
-
-    if (isX11) {
-        // X11: shader target is first_child (surface actor).
-        // The shadow actor is bound to the WindowActor, so map
-        // first_child bounds (0+inset … w-inset) into shadow-actor coords.
-        const [dx, dy, dw, dh] = contentOffset(win);
-        rawX1 = pad + dx + sc;
-        rawY1 = pad + dy + sc;
-        rawX2 = pad + dx + actor.width  + dw - sc;
-        rawY2 = pad + dy + actor.height + dh - sc;
-    } else {
-        // Wayland: shader target is the WindowActor itself.
-        const [dx, dy, dw, dh] = contentOffset(win);
-        rawX1 = pad + dx;
-        rawY1 = pad + dy;
-        rawX2 = pad + dx + actor.width  + dw;
-        rawY2 = pad + dy + actor.height + dh;
-    }
+    // The shadow actor is positioned via BindConstraint to the WindowActor 
+    // with offset: [dx - pad, dy - pad].
+    // So the window's logical frame (which starts at dx, dy) maps exactly 
+    // to [pad, pad] in the shadow actor's local coordinates.
+    // The width/height of the frame is (actor.width + dw).
+    const rawX1 = pad;
+    const rawY1 = pad;
+    const rawX2 = pad + actor.width  + dw;
+    const rawY2 = pad + actor.height + dh;
 
     // Account for padding inset (same as RoundedCornersEffect)
     const bx1 = rawX1 + cfg.padding.left   * sc;
@@ -494,7 +486,9 @@ function refreshShadowClip(actor, shadowActor) {
         radius    = maxR;
     }
 
-    effect.setClip([bx1, by1, bx2, by2], radius, exponent);
+    // Pass sw/sh explicitly so the shader step uniform is correct even when
+    // the shadow actor's BindConstraints haven't been resolved yet.
+    effect.setClip([bx1, by1, bx2, by2], radius, exponent, sw, sh);
 }
 
 // ─────────────────────────────────────────────────────────────────────────────
@@ -609,9 +603,9 @@ function refreshRoundedCorners(actor) {
         refreshShadowClip(actor, data.shadow);
 
         // Keep BindConstraint offsets in sync with the current window geometry
-        const [dx, dy, dw, dh] = contentOffset(win);
         const sc  = scaleFactor(win);
         const pad = SHADOW_PADDING * sc;
+        const [dx, dy, dw, dh] = contentOffset(win);
         const newOffsets = [dx - pad, dy - pad, dw + 2 * pad, dh + 2 * pad];
 
         if (data.shadow) {

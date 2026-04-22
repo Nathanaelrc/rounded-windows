@@ -75,7 +75,7 @@ float getOpacity(vec2 p, vec4 b, float r, float e) {
 `;
 
 const ROUNDED_CODE = /* glsl */`
-    vec2  p = cogl_tex_coord0_in.xy / pixelStep;
+    vec2  p = cogl_tex_coord_in[0].xy / pixelStep;
     float a = getOpacity(p, bounds, clipRadius, exponent);
 
     if (borderWidth > 0.9 || borderWidth < -0.9) {
@@ -149,7 +149,7 @@ float shadowGetOpacity(vec2 p, vec4 b, float r, float e) {
 `;
 
 const SHADOW_CODE = /* glsl */`
-    vec2 p = cogl_tex_coord0_in.xy / shadowStep;
+    vec2 p = cogl_tex_coord_in[0].xy / shadowStep;
     // opacity = 1 inside the squircle, 0 outside, anti-aliased at edges
     float opacity = shadowGetOpacity(p, shadowBounds, shadowRadius, shadowExp);
     // Erase the shadow where the window content would be (inside the squircle)
@@ -290,17 +290,23 @@ export const ClipShadowEffect = GObject.registerClass(
          *                             in shadow-actor pixel coordinates
          * @param {number}   radius  – squircle corner radius (same as RoundedCornersEffect)
          * @param {number}   exp     – squircle exponent (same as RoundedCornersEffect)
+         * @param {number}   sw      – shadow actor width  (0 = read from actor)
+         * @param {number}   sh      – shadow actor height (0 = read from actor)
+         *
+         * sw/sh may be passed explicitly to avoid a layout-timing race:
+         * BindConstraints are resolved on the next Clutter layout pass, so
+         * this.actor.get_width() can return 0 on the first call (e.g. for
+         * Qt/OpenGL X11 windows that defer applyEffectTo until notify::size).
          */
-        setClip(bounds, radius, exp) {
+        setClip(bounds, radius, exp, sw = 0, sh = 0) {
             this._ensureUniforms();
             if (!this._u) return;
 
-            const w = this.actor.get_width();
-            const h = this.actor.get_height();
-            const step = [
-                w > 0 ? 1 / w : 1,
-                h > 0 ? 1 / h : 1,
-            ];
+            const w = sw > 0 ? sw : this.actor.get_width();
+            const h = sh > 0 ? sh : this.actor.get_height();
+            if (w <= 0 || h <= 0) return;
+
+            const step = [1 / w, 1 / h];
 
             this.set_uniform_float(this._u.bounds,  4, bounds);
             this.set_uniform_float(this._u.radius,  1, [radius]);
