@@ -153,7 +153,6 @@ function shouldSkip(win) {
     if (!wmClass)
         return true;   // null or empty string – not yet initialised
 
-    // Only process normal application windows
     const normalTypes = [
         Meta.WindowType.NORMAL,
         Meta.WindowType.DIALOG,
@@ -228,6 +227,12 @@ function targetActor(actor) {
     if (win && win.get_client_type) {
         // Meta.WindowClientType.WAYLAND === 1
         if (win.get_client_type() !== 1) {
+            let child = actor.get_first_child();
+            while (child) {
+                if (child.get_texture?.())
+                    return child;
+                child = child.get_first_child?.() || null;
+            }
             return actor.get_first_child() || actor;
         }
     }
@@ -696,6 +701,16 @@ function applyEffectTo(actor) {
     // Wayland / XWayland windows may not have a surface child yet.
     if (!actor.firstChild) {
         const connId = actor.connect('notify::first-child', () => {
+            actor.disconnect(connId);
+            applyEffectTo(actor);
+        });
+        return;
+    }
+
+    const win = actor.metaWindow;
+    const isX11 = win && win.get_client_type && win.get_client_type() !== 1;
+    if (isX11 && !targetActor(actor).get_texture?.()) {
+        const connId = actor.connect('notify::size', () => {
             actor.disconnect(connId);
             applyEffectTo(actor);
         });
