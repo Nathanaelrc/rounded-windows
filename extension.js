@@ -305,7 +305,7 @@ function getWindowTexture(actor) {
 /** Get the RoundedCornersEffect attached to a window actor (or null). */
 function getEffect(actor) {
     const target = targetActor(actor);
-    return target ? target.get_effect(ROUNDED_CORNERS_EFFECT) : null;
+    return target ? target.lastChild.get_effect(ROUNDED_CORNERS_EFFECT) : null;
 }
 
 /**
@@ -581,7 +581,7 @@ function onAddEffect(actor) {
         logDbg(`  → skipped`);
         return;
     }
-
+    
     const target = targetActor(actor);
     if (!target) return;
 
@@ -590,7 +590,7 @@ function onAddEffect(actor) {
         return;
     }
 
-    target.add_effect_with_name(ROUNDED_CORNERS_EFFECT, new RoundedCornersEffect());
+    target.get_last_child()?.add_effect_with_name(ROUNDED_CORNERS_EFFECT, new RoundedCornersEffect());
 
     let shadow = null;
     let bindings = [];
@@ -616,19 +616,10 @@ function onAddEffect(actor) {
     refreshRoundedCorners(actor);
 }
 
-/** Remove effects and shadow from a window actor. */
-function onRemoveEffect(actor) {
+function disconnectSignal(actor){
     try {
-        logDbg(`Removing effect from "${actor.metaWindow?.title}"`);
+        logDbg(`Removing signals from "${actor.metaWindow?.title}"`);
     } catch (_) {}
-
-    try {
-        const target = targetActor(actor);
-        if (target)
-            target.remove_effect_by_name(ROUNDED_CORNERS_EFFECT);
-    } catch (_) {
-        // Actor may already be destroyed
-    }
 
     const data = _actorMap.get(actor);
     if (!data) return;
@@ -640,6 +631,24 @@ function onRemoveEffect(actor) {
         }
         data.connections = [];
     }
+}
+
+/** Remove effects and shadow from a window actor. */
+function onRemoveEffect(actor) {
+    try {
+        logDbg(`Removing effect from "${actor.metaWindow?.title}"`);
+    } catch (_) {}
+
+    try {
+        const target = targetActor(actor);
+        if (target)
+            target.get_last_child()?.remove_effect_by_name(ROUNDED_CORNERS_EFFECT);
+    } catch (_) {
+        // Actor may already be destroyed
+    }
+
+    const data = _actorMap.get(actor);
+    if (!data) return;
 
     // Unbind property mirrors
     for (const b of data.bindings)
@@ -785,6 +794,9 @@ function attachWindowSignals(actor) {
 
     // Fullscreen state changed (may not cause a size change)
     addWinConn(win, 'notify::fullscreen',     () => { if (actor.metaWindow) refreshRoundedCorners(actor); });
+    // Maximized state changed (may not cause a size change)
+    addWinConn(win, 'notify::maximized-horizontally',     () => { if (actor.metaWindow) refreshRoundedCorners(actor); });
+    addWinConn(win, 'notify::maximized-vertically',     () => { if (actor.metaWindow) refreshRoundedCorners(actor); });
     // Focus changed → update shadow style
     addWinConn(win, 'notify::appears-focused',() => { if (actor.metaWindow) refreshFocus(actor); });
     // Monitor / workspace change
@@ -826,6 +838,19 @@ function applyEffectTo(actor) {
         });
         return;
     }
+
+    // make sure that the actor is not a bms-application-blurred-widget.
+    const bmsActorName = 'bms-application-blurred-widget';
+    const actorReady = (actor.firstChild && actor.firstChild.name !== bmsActorName) ||
+        (actor.lastChild && actor.lastChild.name !== bmsActorName);
+    if (!actorReady) {
+        const id = actor.connect('child-added', (actor, child) => {
+            if (child.name !== bmsActorName) {
+                applyEffectTo(actor);
+                actor.disconnect(id);
+            }
+        });
+}
 
     // Add the effect FIRST, then connect signals. If signals were connected
     // before the effect, adding the effect could trigger notify::size
@@ -877,7 +902,10 @@ function enableEffect() {
 
     // Window closed
     addConnection(global.windowManager, 'destroy',
-        (_, actor) => removeEffectFrom(actor));
+        (_, actor) => {
+            disconnectSignal(actor);
+            removeEffectFrom(actor)
+        });
 
     // Minimise: always hide shadow + disable effect to prevent the white
     // background of the shadow actor from showing during the animation.
