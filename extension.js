@@ -616,6 +616,23 @@ function onAddEffect(actor) {
     refreshRoundedCorners(actor);
 }
 
+function disconnectSignal(actor){
+    try {
+        logDbg(`Removing signals from "${actor.metaWindow?.title}"`);
+    } catch (_) {}
+
+    const data = _actorMap.get(actor);
+    if (!data) return;
+
+    // Disconnect per-window signals safely
+    if (data.connections) {
+        for (const c of data.connections) {
+            try { c.obj.disconnect(c.id); } catch (_) {}
+        }
+        data.connections = [];
+    }
+}
+
 /** Remove effects and shadow from a window actor. */
 function onRemoveEffect(actor) {
     try {
@@ -632,14 +649,6 @@ function onRemoveEffect(actor) {
 
     const data = _actorMap.get(actor);
     if (!data) return;
-
-    // Disconnect per-window signals safely
-    if (data.connections) {
-        for (const c of data.connections) {
-            try { c.obj.disconnect(c.id); } catch (_) {}
-        }
-        data.connections = [];
-    }
 
     // Unbind property mirrors
     for (const b of data.bindings)
@@ -785,6 +794,9 @@ function attachWindowSignals(actor) {
 
     // Fullscreen state changed (may not cause a size change)
     addWinConn(win, 'notify::fullscreen',     () => { if (actor.metaWindow) refreshRoundedCorners(actor); });
+    // Maximized state changed (may not cause a size change)
+    addWinConn(win, 'notify::maximized-horizontally',     () => { if (actor.metaWindow) refreshRoundedCorners(actor); });
+    addWinConn(win, 'notify::maximized-vertically',     () => { if (actor.metaWindow) refreshRoundedCorners(actor); });
     // Focus changed → update shadow style
     addWinConn(win, 'notify::appears-focused',() => { if (actor.metaWindow) refreshFocus(actor); });
     // Monitor / workspace change
@@ -890,7 +902,10 @@ function enableEffect() {
 
     // Window closed
     addConnection(global.windowManager, 'destroy',
-        (_, actor) => removeEffectFrom(actor));
+        (_, actor) => {
+            disconnectSignal(actor);
+            removeEffectFrom(actor)
+        });
 
     // Minimise: always hide shadow + disable effect to prevent the white
     // background of the shadow actor from showing during the animation.
