@@ -305,7 +305,7 @@ function getWindowTexture(actor) {
 /** Get the RoundedCornersEffect attached to a window actor (or null). */
 function getEffect(actor) {
     const target = targetActor(actor);
-    return target ? target.get_effect(ROUNDED_CORNERS_EFFECT) : null;
+    return target ? target.lastChild.get_effect(ROUNDED_CORNERS_EFFECT) : null;
 }
 
 /**
@@ -581,7 +581,7 @@ function onAddEffect(actor) {
         logDbg(`  → skipped`);
         return;
     }
-
+    
     const target = targetActor(actor);
     if (!target) return;
 
@@ -590,7 +590,7 @@ function onAddEffect(actor) {
         return;
     }
 
-    target.add_effect_with_name(ROUNDED_CORNERS_EFFECT, new RoundedCornersEffect());
+    target.get_last_child()?.add_effect_with_name(ROUNDED_CORNERS_EFFECT, new RoundedCornersEffect());
 
     let shadow = null;
     let bindings = [];
@@ -625,7 +625,7 @@ function onRemoveEffect(actor) {
     try {
         const target = targetActor(actor);
         if (target)
-            target.remove_effect_by_name(ROUNDED_CORNERS_EFFECT);
+            target.get_last_child()?.remove_effect_by_name(ROUNDED_CORNERS_EFFECT);
     } catch (_) {
         // Actor may already be destroyed
     }
@@ -826,6 +826,19 @@ function applyEffectTo(actor) {
         });
         return;
     }
+
+    // make sure that the actor is not a bms-application-blurred-widget.
+    const bmsActorName = 'bms-application-blurred-widget';
+    const actorReady = (actor.firstChild && actor.firstChild.name !== bmsActorName) ||
+        (actor.lastChild && actor.lastChild.name !== bmsActorName);
+    if (!actorReady) {
+        const id = actor.connect('child-added', (actor, child) => {
+            if (child.name !== bmsActorName) {
+                applyEffectTo(actor);
+                actor.disconnect(id);
+            }
+        });
+}
 
     // Add the effect FIRST, then connect signals. If signals were connected
     // before the effect, adding the effect could trigger notify::size
